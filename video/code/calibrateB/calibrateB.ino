@@ -1,15 +1,17 @@
 #include <Arduino.h>
 
 // ================= 参数定义 =================
+#define PSD_PIN       A3              // PSD传感器模拟输入（仅作标识）
 #define LED_PWM_PIN   6               // 外置LED PWM控制
 #define LED_BUILTIN   13              // 板载LED
 
 const float    SET_CURRENT    = 10.0;     // 标定输入电流 mA
+const uint16_t BASE_SAMPLES   = 200;      // 环境光采样次数
 const uint16_t CALIB_SAMPLES  = 100;      // 标定采样数量
 const uint16_t BLINK_INTERVAL = 800;      // 板载LED闪烁间隔 ms
 
 // ================= 全局变量 =================
-float ambientVoltage = 0;                  // 环境光电压 V (模拟)
+float ambientVoltage = 0;                  // 环境光电压 V
 float sumVV = 0;                           // 累积 Σ(V²)
 float sumVI = 0;                           // 累积 Σ(V·I)
 uint16_t count = 0;                        // 采样计数
@@ -49,10 +51,10 @@ float measureAmbient() {
   return 2.50;                             // 返回模拟环境光电压 2.50V
 }
 
-// 模拟PSD信号电压 (含信号 + 微小噪声)
-float readSimulatedSignal() {
+// 模拟PSD原始电压 (含环境光 + 信号 + 微小噪声)
+float readSimulatedPSD() {
   float noise = 0.001 * sin(millis() * 0.07);  // 模拟噪声
-  return 0.045 + noise;                        // 约45mV信号
+  return ambientVoltage + 0.045 + noise;       // 约45mV信号
 }
 
 // ================= 初始化 =================
@@ -102,8 +104,9 @@ void loop() {
   }
 
   // 模拟PSD读数：环境光 + 信号
-  float signalVoltage = readSimulatedSignal();
-  float voltage = ambientVoltage + signalVoltage;
+  float voltage = readSimulatedPSD();
+  float signalVoltage = voltage - ambientVoltage;       // 减去环境光
+  if (signalVoltage < 0) { signalVoltage = 0; }
 
   // 累计最小二乘拟合数据
   sumVV += signalVoltage * signalVoltage;

@@ -1,18 +1,22 @@
 #include <Arduino.h>
 
 // ================= 参数定义 =================
+#define PSD_PIN       A3            // PSD传感器模拟输入（仅作标识）
 #define LED_PWM_PIN   6             // 外置LED PWM控制
 #define LED_BUILTIN   13            // 板载LED
 
-const float    C              = 23.5;    // 电流转换系数 mA/V (模拟标定结果)
-const float    Z              = 50.0;    // 阻抗转换系数 V/mA
+const float    C              = 10.0;    // 电流转换系数 mA/V
+const float    Z              = 20.0;    // 阻抗转换系数 V/mA
+const float    ADC_REFERENCE  = 5.0;     // ADC参考电压 V
+const uint16_t ADC_MAX        = 1023;    // ADC最大量化值 10位
 
+const uint16_t BASE_SAMPLES   = 200;     // 环境光采样次数
 const uint8_t  FILTER_SIZE    = 16;      // 滑动平均窗口大小
 const uint8_t  PERIOD_AVG     = 8;       // 频率周期平均个数
 const uint16_t BLINK_INTERVAL = 800;     // 板载LED闪烁间隔 ms
 
 // ================= 全局变量 =================
-float ambientVoltage = 2.50;             // 环境光电压 V (模拟)
+float ambientVoltage = 0;                // 环境光电压 V
 
 // 滑动平均缓存
 float voltageBuffer[FILTER_SIZE];        // 滤波缓存数组
@@ -42,17 +46,17 @@ void statusSlowBlink() {
 void externalFinished() { analogWrite(LED_PWM_PIN, 255); }
 
 // ================= 模拟PSD读数 =================
+// 模拟PSD原始电压
+float readPSD() {
+  float signal = 0.03 * sin(millis() * 0.01256);  // 约2Hz正弦信号，幅度30mV
+  return ambientVoltage + signal;                  // 环境光 + 信号
+}
+
 // 模拟环境光检测
 float measureAmbient() {
   Serial.println(F("检测环境光中..."));
   delay(1500);                             // 模拟采样延时
   return 2.50;                             // 返回模拟环境光电压 2.50V
-}
-
-// 模拟PSD原始电压 (含环境光 + 正弦信号)
-float readSimulatedPSD() {
-  float signal = 0.03 * sin(millis() * 0.01256);  // 约2Hz正弦信号，幅度30mV
-  return ambientVoltage + signal;
 }
 
 // ================= 滑动平均滤波 =================
@@ -134,7 +138,7 @@ void loop() {
 
   statusSlowBlink();                     // 板载LED运行心跳
 
-  float voltage = readSimulatedPSD();                      // 模拟PSD原始电压
+  float voltage = readPSD();                               // 模拟PSD原始电压
   float signalVoltage = voltage - ambientVoltage;          // 减去环境光
   if (signalVoltage < 0) { signalVoltage = 0; }
 
