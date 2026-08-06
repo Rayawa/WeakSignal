@@ -1,24 +1,33 @@
+// 标定模块 B版本（视频演示）：不读取ADS1115/采样电阻，直接模拟分级标定数据，
+// 输出格式与灯语完全同 A版本（code/calibrate/calibrate.ino）。
 #include <Arduino.h>
 
 // ================= 参数定义 =================
-#define PSD_PIN       A3              // PSD传感器模拟输入（仅作标识）
-#define LED_PWM_PIN   6               // 外置LED PWM控制
-#define LED_BUILTIN   13              // 板载LED
+#define COIL_PWM_PIN   6               // 偏转线圈PWM驱动引脚
+#define ADC_PIN        A0              // 采样电阻电压ADC引脚
+#define LED_BUILTIN    13              // 板载LED
 
-const float    SET_CURRENT    = 10.0;     // 标定输入电流 mA
-const uint16_t BASE_SAMPLES   = 200;      // 环境光采样次数
-const uint16_t CALIB_SAMPLES  = 100;      // 标定采样数量
-const uint16_t BLINK_INTERVAL = 800;      // 板载LED闪烁间隔 ms
+const float    SAMPLE_RESISTOR = 220.0;    // 采样电阻阻值 Ω
+const uint8_t  NUM_LEVELS      = 6;        // 标定档位数量
+const uint8_t  PWM_LEVELS[NUM_LEVELS] = { 42, 84, 126, 168, 210, 255 };  // 各级PWM占空比(0~255)
+const uint16_t SETTLE_MS       = 500;      // 每级稳定等待时间 ms (演示缩短)
+const uint8_t  SAMPLES_PER_LEVEL = 17;     // 每级采样组数（6级累计约100组）
+const uint16_t CALIB_SAMPLES   = 100;      // 每轮累计数据组数，满后输出推荐标定值
+const uint16_t BLINK_INTERVAL  = 800;      // 板载LED闪烁间隔 ms
+
+// 模拟标定数据真值（拟合结果应接近这些值）
+const float    K_TRUE          = 30.0;     // 模拟真值 k_IP mA/单位P (保证P∈[-1,1])
+const float    B_TRUE          = 0.02;     // 模拟真值 b_IP mA
 
 // ================= 全局变量 =================
-float ambientVoltage = 0;                  // 环境光电压 V
-float sumVV = 0;                           // 累积 Σ(V²)
-float sumVI = 0;                           // 累积 Σ(V·I)
-uint16_t count = 0;                        // 采样计数
-bool calibrationDone = false;              // 标定完成标志
+float V1_ambient = 2.50;                   // PSD通道1环境光电压 V (模拟)
+float V2_ambient = 2.50;                   // PSD通道2环境光电压 V (模拟)
+float sumP = 0, sumI = 0, sumPP = 0, sumPI = 0, sumII = 0;  // 最小二乘累积量
+uint16_t count = 0;                        // 本轮累计数据组数
+uint8_t level = 0;                         // 当前档位
+uint8_t levelSample = 0;                   // 当前档位内已采组数
 
-// ================= LED控制 =================
-// 板载LED缓慢闪烁（统一灯语）
+// ================= 灯语 (与A版本完全一致) =================
 void statusSlowBlink() {
   static uint32_t timer = 0;
   static bool state = false;
@@ -29,50 +38,68 @@ void statusSlowBlink() {
   }
 }
 
-// 外置LED标定闪烁（100ms周期，50%占空比）
-void externalCalibrateBlink() {
-  static uint32_t timer = 0;
-  static bool state = false;
-  if (millis() - timer > 100) {
-    timer = millis();
-    state = !state;
-    analogWrite(LED_PWM_PIN, state ? 50 : 0);
-  }
-}
-
-// 外置LED完成常亮
-void externalFinished() { analogWrite(LED_PWM_PIN, 255); }
-
-// ================= 模拟PSD读数 =================
-// 模拟环境光检测
-float measureAmbient() {
+// ================= 环境光测量 (模拟) =================
+void measureAmbient() {
   Serial.println(F("检测环境光中..."));
-  delay(1500);                             // 模拟采样延时
-  return 2.50;                             // 返回模拟环境光电压 2.50V
+  delay(1000);
+  V1_ambient = 2.50;
+  V2_ambient = 2.50;
 }
 
-// 模拟PSD原始电压 (含环境光 + 信号 + 微小噪声)
-float readSimulatedPSD() {
-  float noise = 0.001 * sin(millis() * 0.07);  // 模拟噪声
-  return ambientVoltage + 0.045 + noise;       // 约45mV信号
+// 重置本轮累积量
+void resetSums() {
+  sumP = 0; sumI = 0; sumPP = 0; sumPI = 0; sumII = 0;
+}
+
+// ================= 最小二乘拟合 I = k_IP·P + b_IP 并输出推荐标定值 (与A版本一致) =================
+void fitAndReport() {
+  uint16_t n = count;
+  float denom = n * sumPP - sumP * sumP;
+  float k_IP = (denom > 0) ? (n * sumPI - sumP * sumI) / denom : 0;
+  float b_IP = (sumI - k_IP * sumP) / n;
+
+  // 相关系数 R²（由累积量直接计算）
+  float meanI = sumI / n;
+  float ssTot = sumII - n * meanI * meanI;
+  float ssRes = sumII + k_IP * k_IP * sumPP + n * b_IP * b_IP
+              - 2 * k_IP * sumPI - 2 * b_IP * sumI + 2 * k_IP * b_IP * sumP;
+  float r2 = (ssTot > 0) ? (1 - ssRes / ssTot) : 0;
+
+  Serial.println();
+  Serial.println(F("==================== 推荐标定值 ===================="));
+  Serial.print(F("k_IP = "));
+  Serial.print(k_IP, 6);
+  Serial.println(F(" mA/单位P"));
+  Serial.print(F("b_IP = "));
+  Serial.print(b_IP, 6);
+  Serial.println(F(" mA"));
+  Serial.print(F("R²   = "));
+  Serial.println(r2, 6);
+  Serial.println(F("=================================================="));
 }
 
 // ================= 初始化 =================
 void setup() {
   Serial.begin(115200);
   delay(500);
-  pinMode(LED_PWM_PIN, OUTPUT);
+  pinMode(COIL_PWM_PIN, OUTPUT);
+  pinMode(ADC_PIN, INPUT);
   pinMode(LED_BUILTIN, OUTPUT);
+
+  // 模拟ADS1115初始化成功
+  Serial.print(F("初始化ADS1115... "));
+  delay(500);
+  Serial.println(F("完成"));
+
+  // 初始化完成，板载LED常亮
+  digitalWrite(LED_BUILTIN, HIGH);
 
   Serial.println();
   Serial.println(F("=============================="));
   Serial.println(F("       标定校准模块"));
   Serial.println(F("=============================="));
-
-  // 初始化完成，板载LED常亮
-  digitalWrite(LED_BUILTIN, HIGH);
   Serial.println(F("----------------------------------"));
-  Serial.println(F("初始化完成! 按r键开始标定采样"));
+  Serial.println(F("初始化完成! 按r键开始分级标定采样"));
   Serial.println(F("----------------------------------"));
 }
 
@@ -80,73 +107,77 @@ void setup() {
 void loop() {
   static bool started = false;
 
-  // 等待r键启动（启动前LED保持常亮）
   if (!started) {
     if (Serial.available()) {
       if (Serial.read() == 'r') {
         started = true;
+        count = 0; level = 0; levelSample = 0;
+        resetSums();
         Serial.println(F("开始标定采样"));
-        while (Serial.available()) { Serial.read(); }  // 清空缓冲区
+        while (Serial.available()) { Serial.read(); }
       }
     }
     return;
   }
 
-  statusSlowBlink();                       // 板载LED运行心跳
+  statusSlowBlink();
 
-  if (!calibrationDone) { externalCalibrateBlink(); }  // 标定中，外置LED闪烁
-
-  // 每个标定轮次开始时测量环境光
-  if (count == 0) {
-    ambientVoltage = measureAmbient();
-    Serial.print(F("环境光 = "));
-    Serial.println(ambientVoltage, 5);
+  // 每轮开始时：线圈断电，重新测量环境光（对应系统零点b）
+  if (count == 0 && level == 0 && levelSample == 0) {
+    analogWrite(COIL_PWM_PIN, 0);
+    measureAmbient();
+    Serial.print(F("环境光 V1 = "));
+    Serial.print(V1_ambient, 5);
+    Serial.print(F(" V  V2 = "));
+    Serial.print(V2_ambient, 5);
+    Serial.println(F(" V"));
   }
 
-  // 模拟PSD读数：环境光 + 信号
-  float voltage = readSimulatedPSD();
-  float signalVoltage = voltage - ambientVoltage;       // 减去环境光
-  if (signalVoltage < 0) { signalVoltage = 0; }
+  // 切换档位：设定该级PWM占空比并等待系统稳定
+  if (levelSample == 0) {
+    analogWrite(COIL_PWM_PIN, PWM_LEVELS[level]);
+    Serial.print(F("标定级 "));
+    Serial.print(level + 1);
+    Serial.print(F("/"));
+    Serial.print(NUM_LEVELS);
+    Serial.print(F("  PWM="));
+    Serial.print(PWM_LEVELS[level]);
+    Serial.println(F("  等待稳定..."));
 
-  // 累计最小二乘拟合数据
-  sumVV += signalVoltage * signalVoltage;
-  sumVI += signalVoltage * SET_CURRENT;
+    uint32_t t0 = millis();
+    while (millis() - t0 < SETTLE_MS) {
+      statusSlowBlink();
+      delay(50);
+    }
+  }
+
+  // 模拟该级实测电流与归一化算子（真值 + 确定性微扰动），并累积
+  float duty = PWM_LEVELS[level];
+  float I = duty / 255.0 * 5.0 / SAMPLE_RESISTOR * 1000.0;
+  float noise = 0.002 * sin(level * 1.7 + count * 0.01);   // 随采样序号变化的微扰动
+  float P = (I - B_TRUE) / K_TRUE + noise;
+  sumP += P; sumI += I; sumPP += P * P; sumPI += P * I; sumII += I * I;
   count++;
+  levelSample++;
 
-  // 实时计算当前C值
-  float currentC = (sumVV > 0) ? (sumVI / sumVV) : 0;
+  Serial.print(F("I="));
+  Serial.print(I, 5);
+  Serial.print(F(" mA\tP="));
+  Serial.println(P, 6);
 
-  // 统一打印
-  Serial.print(F("V="));
-  Serial.print(voltage, 5);
-  Serial.print(F(" V\tPSD="));
-  Serial.print(signalVoltage, 5);
-  Serial.print(F(" V\tI="));
-  Serial.print(SET_CURRENT, 1);
-  Serial.print(F(" mA\tC="));
-  Serial.print(currentC, 6);
-  Serial.println(F(" mA/V"));
+  // 该级采满后切换下一档
+  if (levelSample >= SAMPLES_PER_LEVEL) {
+    levelSample = 0;
+    level = (level + 1) % NUM_LEVELS;
+  }
 
-  // 标定完成处理
+  // 每累计满 CALIB_SAMPLES 组：拟合并输出推荐标定值，随后重新测环境光进入下一轮
   if (count >= CALIB_SAMPLES) {
-    float C = (sumVV > 0) ? (sumVI / sumVV) : 0;
-
-    Serial.println();
-    Serial.print(F("==================== 推荐 C 值 = "));
-    Serial.print(C, 6);
-    Serial.println(F(" mA/V ===================="));
-
-    calibrationDone = true;
-    externalFinished();                    // 外置LED常亮
-
-    delay(1500);
-
-    // 重置，下一轮将从count==0开始，重新测量环境光
-    sumVV = 0;
-    sumVI = 0;
-    count = 0;
-    calibrationDone = false;
-    analogWrite(LED_PWM_PIN, 0);
+    analogWrite(COIL_PWM_PIN, 0);         // 本轮结束，线圈断电
+    fitAndReport();                       // 输出推荐 k_IP、b_IP、R²
+    resetSums();
+    count = 0; level = 0; levelSample = 0;
+    Serial.println(F("开始新一轮标定采样"));
   }
 
   delay(100);

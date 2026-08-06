@@ -7,13 +7,13 @@ const uint8_t PIN_CURRENT = A0;         // 电流检测 ADC
 const uint8_t PIN_PWM     = 6;          // PWM输出线圈
 
 // ================= 常量定义 =================
-const uint8_t  GEAR_1          = 85;      // 第一档 1/3亮度
-const uint8_t  GEAR_2          = 170;     // 第二档 2/3亮度
-const uint8_t  GEAR_3          = 255;     // 第三档 全亮
+const uint8_t  NUM_GEARS       = 7;      // 亮度档位数
+const uint8_t  GEARS[NUM_GEARS] = { 36, 73, 109, 146, 182, 219, 255 };  // 七档亮度(0~255)
 const float    SAMPLE_RESISTOR = 220.0;  // 采样电阻 Ω
 const uint16_t BLINK_INTERVAL  = 800;    // 板载LED闪烁间隔 ms
 
-uint8_t brightness = 0;                  // 当前亮度档位
+uint8_t gearIndex = 0;                   // 当前亮度档位索引
+uint8_t brightness = 0;                  // 当前亮度值
 
 // ================= 初始化 =================
 void setup() {
@@ -70,7 +70,8 @@ void loop() {
     if (Serial.available()) {
       if (Serial.read() == 'r') {
         started = true;
-        brightness = GEAR_1;             // 默认第一档
+        gearIndex = 0;                   // 默认第一档
+        brightness = GEARS[gearIndex];
         analogWrite(PIN_LED, brightness);
         analogWrite(PIN_PWM, brightness);
         Serial.println(F("开始通入电流"));
@@ -95,10 +96,9 @@ void loop() {
   if (buttonState == LOW && lastButtonState == HIGH && millis() - lastDebounce > 50) {
     lastDebounce = millis();
 
-    // 循环切换三档
-    if (brightness == GEAR_1) { brightness = GEAR_2; }
-    else if (brightness == GEAR_2) { brightness = GEAR_3; }
-    else { brightness = GEAR_1; }
+    // 循环切换七档
+    gearIndex = (gearIndex + 1) % NUM_GEARS;
+    brightness = GEARS[gearIndex];
 
     analogWrite(PIN_LED, brightness);
     analogWrite(PIN_PWM, brightness);

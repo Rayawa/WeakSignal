@@ -1,26 +1,29 @@
 #include <Wire.h>
 
-// ================= 引脚定义 =================
-const uint8_t PIN_LED    = 9;          // 外接LED PWM输出
-const uint8_t PIN_BUTTON = 8;          // 按钮输入
-const uint8_t PIN_PWM    = 6;          // PWM输出线圈
+// ================= 引脚定义 (与A版本一致，演示时可不接元件) =================
+const uint8_t PIN_LED     = 9;          // 外接LED PWM输出
+const uint8_t PIN_BUTTON  = 8;          // 按钮输入 (B版本改由串口'g'模拟)
+const uint8_t PIN_CURRENT = A0;         // 电流检测 ADC
+const uint8_t PIN_PWM     = 6;          // PWM输出线圈
 
 // ================= 常量定义 =================
-const uint8_t  GEAR_1         = 85;      // 第一档 1/3亮度
-const uint8_t  GEAR_2         = 170;     // 第二档 2/3亮度
-const uint8_t  GEAR_3         = 255;     // 第三档 全亮
-const float    MAX_CURRENT_MA = 20.0;   // 最大模拟电流 mA
-const uint16_t BLINK_INTERVAL = 800;    // 板载LED闪烁间隔 ms
+const uint8_t  NUM_GEARS       = 7;      // 亮度档位数
+const uint8_t  GEARS[NUM_GEARS] = { 36, 73, 109, 146, 182, 219, 255 };  // 七档亮度(0~255)
+const float    SAMPLE_RESISTOR = 220.0;  // 采样电阻 Ω
+const uint16_t BLINK_INTERVAL  = 800;    // 板载LED闪烁间隔 ms
 
-uint8_t brightness = 0;                  // 当前亮度档位
+uint8_t gearIndex = 0;                   // 当前亮度档位索引
+uint8_t brightness = 0;                  // 当前亮度值
 
-// ================= 模拟电流计算 =================
-void measureAndPrint() {
-  float current_mA = (brightness / 255.0) * MAX_CURRENT_MA;  // PWM占空比→电流
-
-  Serial.print(F("[当前电流] "));
-  Serial.print(current_mA, 2);
-  Serial.println(F(" mA"));
+// ================= 灯语 (与A版本完全一致) =================
+void statusSlowBlink() {
+  static uint32_t timer = 0;
+  static bool state = false;
+  if (millis() - timer > BLINK_INTERVAL) {
+    timer = millis();
+    state = !state;
+    digitalWrite(LED_BUILTIN, state);
+  }
 }
 
 // ================= 初始化 =================
@@ -30,6 +33,7 @@ void setup() {
 
   pinMode(PIN_LED, OUTPUT);
   pinMode(PIN_PWM, OUTPUT);
+  pinMode(PIN_CURRENT, INPUT);
   pinMode(PIN_BUTTON, INPUT_PULLUP);
   pinMode(LED_BUILTIN, OUTPUT);
 
@@ -43,8 +47,9 @@ void setup() {
   Serial.println(F("=============================="));
   Serial.println(F("开始初始化..."));
 
-  // 模拟I2C总线初始化
+  // I2C总线初始化 (模拟)
   Serial.print(F("初始化I2C总线... "));
+  Wire.begin();
   delay(1500);
   Serial.println(F("完成"));
 
@@ -53,6 +58,16 @@ void setup() {
   Serial.println(F("----------------------------------"));
   Serial.println(F("初始化完成! 按r键开始通入电流"));
   Serial.println(F("----------------------------------"));
+}
+
+// ================= 电流测量 (模拟：按当前档位推算) =================
+void measureAndPrint() {
+  float voltage = brightness / 255.0 * 5.0;          // 模拟采样电阻电压
+  float current_mA = voltage / SAMPLE_RESISTOR * 1000.0;  // 欧姆定律计算电流
+
+  Serial.print(F("[当前电流] "));
+  Serial.print(current_mA, 2);
+  Serial.println(F(" mA"));
 }
 
 // ================= 主循环 =================
@@ -66,7 +81,8 @@ void loop() {
     if (Serial.available()) {
       if (Serial.read() == 'r') {
         started = true;
-        brightness = GEAR_1;             // 默认第一档
+        gearIndex = 0;                   // 默认第一档
+        brightness = GEARS[gearIndex];
         analogWrite(PIN_LED, brightness);
         analogWrite(PIN_PWM, brightness);
         Serial.println(F("开始通入电流"));
@@ -84,21 +100,16 @@ void loop() {
     digitalWrite(LED_BUILTIN, ledState);
   }
 
-  // 按键切换档位（下降沿触发，50ms消抖）
-  static bool lastButtonState = HIGH;
-  static uint32_t lastDebounce = 0;
-  bool buttonState = digitalRead(PIN_BUTTON);
-  if (buttonState == LOW && lastButtonState == HIGH && millis() - lastDebounce > 50) {
-    lastDebounce = millis();
+  // 串口'g'命令切换档位（替代A版本的物理按键，输出与灯语不变）
+  if (Serial.available()) {
+    if (Serial.read() == 'g') {
+      // 循环切换七档
+      gearIndex = (gearIndex + 1) % NUM_GEARS;
+      brightness = GEARS[gearIndex];
 
-    // 循环切换三档
-    if (brightness == GEAR_1) { brightness = GEAR_2; }
-    else if (brightness == GEAR_2) { brightness = GEAR_3; }
-    else { brightness = GEAR_1; }
-
-    analogWrite(PIN_LED, brightness);
-    analogWrite(PIN_PWM, brightness);
-    measureAndPrint();
+      analogWrite(PIN_LED, brightness);
+      analogWrite(PIN_PWM, brightness);
+      measureAndPrint();
+    }
   }
-  lastButtonState = buttonState;
 }
