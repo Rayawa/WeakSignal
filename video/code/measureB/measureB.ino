@@ -44,10 +44,9 @@ void statusSlowBlink() {
     timer = millis();
     state = !state;
     digitalWrite(LED_BUILTIN, state);
+    digitalWrite(LED_PWM_PIN, state);     // D6 外置LED与D13板载LED同相慢闪
   }
 }
-
-void externalFinished() { analogWrite(LED_PWM_PIN, 255); }
 
 // ================= 模拟PSD双通道 =================
 void measureAmbient() {
@@ -102,6 +101,7 @@ void setup() {
   delay(500);
   pinMode(LED_PWM_PIN, OUTPUT);
   pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_PWM_PIN, HIGH);        // 启动前 D6 与 D13 均常亮
 
   // 模拟ADS1115初始化成功
   Serial.print(F("初始化ADS1115... "));
@@ -145,7 +145,9 @@ void loop() {
       if (Serial.read() == 'r') {
         started = true;
         Serial.println(F("开始测量"));
-        externalFinished();
+        // 慢闪函数初始为 LOW；先让两灯同步熄灭。
+        digitalWrite(LED_BUILTIN, LOW);
+        digitalWrite(LED_PWM_PIN, LOW);
         while (Serial.available()) { Serial.read(); }
       }
     }

@@ -3,7 +3,7 @@
 #include <Arduino.h>
 
 // ================= 参数定义 =================
-#define COIL_PWM_PIN   6               // 偏转线圈PWM驱动引脚
+#define LED_PWM_PIN    6               // 外置LED PWM控制（标定光源，分级亮度）
 #define ADC_PIN        A0              // 采样电阻电压ADC引脚
 #define LED_BUILTIN    13              // 板载LED
 
@@ -35,6 +35,17 @@ void statusSlowBlink() {
     timer = millis();
     state = !state;
     digitalWrite(LED_BUILTIN, state);
+  }
+}
+
+// 标定过程中 D6 快闪（100 ms 周期、50% 占空比）。
+void externalCalibrateBlink() {
+  static uint32_t timer = 0;
+  static bool state = false;
+  if (millis() - timer >= 50) {
+    timer = millis();
+    state = !state;
+    digitalWrite(LED_PWM_PIN, state);
   }
 }
 
@@ -82,9 +93,10 @@ void fitAndReport() {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  pinMode(COIL_PWM_PIN, OUTPUT);
+  pinMode(LED_PWM_PIN, OUTPUT);
   pinMode(ADC_PIN, INPUT);
   pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_PWM_PIN, HIGH);        // 启动前外置LED常亮
 
   // 模拟ADS1115初始化成功
   Serial.print(F("初始化ADS1115... "));
@@ -121,10 +133,9 @@ void loop() {
   }
 
   statusSlowBlink();
-
-  // 每轮开始时：线圈断电，重新测量环境光（对应系统零点b）
+  externalCalibrateBlink();               // 标定采样中外置LED快闪
+  // 每轮开始时：重新测量环境光（对应系统零点b）
   if (count == 0 && level == 0 && levelSample == 0) {
-    analogWrite(COIL_PWM_PIN, 0);
     measureAmbient();
     Serial.print(F("环境光 V1 = "));
     Serial.print(V1_ambient, 5);
@@ -133,9 +144,8 @@ void loop() {
     Serial.println(F(" V"));
   }
 
-  // 切换档位：设定该级PWM占空比并等待系统稳定
+  // 切换档位：等待系统稳定
   if (levelSample == 0) {
-    analogWrite(COIL_PWM_PIN, PWM_LEVELS[level]);
     Serial.print(F("标定级 "));
     Serial.print(level + 1);
     Serial.print(F("/"));
@@ -147,6 +157,7 @@ void loop() {
     uint32_t t0 = millis();
     while (millis() - t0 < SETTLE_MS) {
       statusSlowBlink();
+      externalCalibrateBlink();
       delay(50);
     }
   }
@@ -173,8 +184,10 @@ void loop() {
 
   // 每累计满 CALIB_SAMPLES 组：拟合并输出推荐标定值，随后重新测环境光进入下一轮
   if (count >= CALIB_SAMPLES) {
-    analogWrite(COIL_PWM_PIN, 0);         // 本轮结束，线圈断电
     fitAndReport();                       // 输出推荐 k_IP、b_IP、R²
+    digitalWrite(LED_PWM_PIN, HIGH);      // 输出推荐标定值时外置LED常亮
+    delay(1500);
+    digitalWrite(LED_PWM_PIN, LOW);       // 外置LED熄灭，进入下一轮
     resetSums();
     count = 0; level = 0; levelSample = 0;
     Serial.println(F("开始新一轮标定采样"));
