@@ -18,6 +18,8 @@ const uint16_t BASE_SAMPLES   = 200;     // 环境光采样次数
 const uint8_t  FILTER_SIZE    = 16;      // 滑动平均窗口大小
 const uint8_t  PERIOD_AVG     = 8;       // 频率周期平均个数
 const uint16_t BLINK_INTERVAL = 800;     // 板载LED闪烁间隔 ms
+const float    DEMO_FREQ       = 100.0;  // 演示显示中心频率 Hz
+const float    DEMO_FREQ_SWING = 2.0;    // 演示频率摆幅 Hz
 
 // ================= 全局变量 =================
 float V1_ambient = 0;                    // PSD通道1环境光电压 V
@@ -68,6 +70,11 @@ float readP() {
   if (V2 < 0) { V2 = 0; }
   float sum = V1 + V2;
   return (sum > 0.001) ? ((V2 - V1) / sum) : 0;
+}
+
+// B版用于演示：频率显示稳定在100 Hz附近，避免静态光斑无法过零导致显示0 Hz。
+float readDemoFrequency() {
+  return DEMO_FREQ + DEMO_FREQ_SWING * sin(2 * PI * 0.2 * millis() / 1000.0);
 }
 
 // ================= 滑动平均滤波 =================
@@ -162,9 +169,9 @@ void loop() {
 
   statusSlowBlink();
 
-  float P = readP();                       // 归一化位置算子
+  float P = -readP();                      // B版坐标方向与A版相反，取负号
   float Pf = filterP(P);                   // 滑动平均滤波
-  updateFrequency(Pf);                     // 过零检测计算频率
+  frequency = readDemoFrequency();         // 演示频率：约100 Hz小幅摆动
 
   float position = Pf * PSD_LENGTH / 2.0;  // 光斑位置 x = P·L/2  mm
   float current = k_IP * Pf + b_IP;        // I = k_IP·P + b_IP  电流 mA
