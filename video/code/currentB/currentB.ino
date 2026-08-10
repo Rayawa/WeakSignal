@@ -2,7 +2,7 @@
 
 // ================= 引脚定义 (与A版本一致，演示时可不接元件) =================
 const uint8_t PIN_LED     = 9;          // 外接LED PWM输出
-const uint8_t PIN_BUTTON  = 8;          // 按钮输入 (B版本改由串口'g'模拟)
+const uint8_t PIN_BUTTON  = 8;          // 按钮输入，另一端接GND
 const uint8_t PIN_CURRENT = A0;         // 电流检测 ADC
 const uint8_t PIN_PWM     = 6;          // PWM输出线圈
 
@@ -11,6 +11,7 @@ const uint8_t  NUM_GEARS       = 7;      // 亮度档位数
 const uint8_t  GEARS[NUM_GEARS] = { 36, 73, 109, 146, 182, 219, 255 };  // 七档亮度(0~255)
 const float    SAMPLE_RESISTOR = 220.0;  // 采样电阻 Ω
 const uint16_t BLINK_INTERVAL  = 800;    // 板载LED闪烁间隔 ms
+const uint16_t DEBOUNCE_DELAY  = 50;     // 按键消抖时间 ms
 
 uint8_t gearIndex = 0;                   // 当前亮度档位索引
 uint8_t brightness = 0;                  // 当前亮度值
@@ -100,16 +101,19 @@ void loop() {
     digitalWrite(LED_BUILTIN, ledState);
   }
 
-  // 串口'g'命令切换档位（替代A版本的物理按键，输出与灯语不变）
-  if (Serial.available()) {
-    if (Serial.read() == 'g') {
-      // 循环切换七档
-      gearIndex = (gearIndex + 1) % NUM_GEARS;
-      brightness = GEARS[gearIndex];
+  // 按键循环切换七档（下降沿触发，按键另一端接GND）
+  static bool lastButtonState = HIGH;
+  static uint32_t lastDebounce = 0;
+  bool buttonState = digitalRead(PIN_BUTTON);
+  if (buttonState == LOW && lastButtonState == HIGH &&
+      millis() - lastDebounce >= DEBOUNCE_DELAY) {
+    lastDebounce = millis();
+    gearIndex = (gearIndex + 1) % NUM_GEARS;
+    brightness = GEARS[gearIndex];
 
-      analogWrite(PIN_LED, brightness);
-      analogWrite(PIN_PWM, brightness);
-      measureAndPrint();
-    }
+    analogWrite(PIN_LED, brightness);
+    analogWrite(PIN_PWM, brightness);
+    measureAndPrint();
   }
+  lastButtonState = buttonState;
 }

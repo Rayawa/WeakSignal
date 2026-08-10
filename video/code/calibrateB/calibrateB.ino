@@ -1,11 +1,12 @@
-// 标定模块 B版本（视频演示）：不读取ADS1115/采样电阻，直接模拟分级标定数据，
-// 输出格式与灯语完全同 A版本（code/calibrate/calibrate.ino）。
+// 标定模块 B版本：不使用ADS1115，Arduino直接读取PSD两路运放输出。
+// PSD通道1接A0，PSD通道2接A1。
 #include <Arduino.h>
 
 // ================= 参数定义 =================
 #define LED_PWM_PIN    6               // 外置LED PWM控制（标定光源，分级亮度）
-#define ADC_PIN        A0              // 采样电阻电压ADC引脚
 #define LED_BUILTIN    13              // 板载LED
+#define PSD1_PIN        A0              // PSD通道1运放输出
+#define PSD2_PIN        A1              // PSD通道2运放输出
 
 const float    SAMPLE_RESISTOR = 220.0;    // 采样电阻阻值 Ω
 const uint8_t  NUM_LEVELS      = 6;        // 标定档位数量
@@ -13,15 +14,12 @@ const uint8_t  PWM_LEVELS[NUM_LEVELS] = { 42, 84, 126, 168, 210, 255 };  // 各�
 const uint16_t SETTLE_MS       = 500;      // 每级稳定等待时间 ms (演示缩短)
 const uint8_t  SAMPLES_PER_LEVEL = 17;     // 每级采样组数（6级累计约100组）
 const uint16_t CALIB_SAMPLES   = 100;      // 每轮累计数据组数，满后输出推荐标定值
+const uint16_t BASE_SAMPLES    = 200;      // 环境光采样次数
 const uint16_t BLINK_INTERVAL  = 800;      // 板载LED闪烁间隔 ms
 
-// 模拟标定数据真值（拟合结果应接近这些值）
-const float    K_TRUE          = 30.0;     // 模拟真值 k_IP mA/单位P (保证P∈[-1,1])
-const float    B_TRUE          = 0.02;     // 模拟真值 b_IP mA
-
 // ================= 全局变量 =================
-float V1_ambient = 2.50;                   // PSD通道1环境光电压 V (模拟)
-float V2_ambient = 2.50;                   // PSD通道2环境光电压 V (模拟)
+float V1_ambient = 0;                      // PSD通道1环境光电压 V
+float V2_ambient = 0;                      // PSD通道2环境光电压 V
 float sumP = 0, sumI = 0, sumPP = 0, sumPI = 0, sumII = 0;  // 最小二乘累积量
 uint16_t count = 0;                        // 本轮累计数据组数
 uint8_t level = 0;                         // 当前档位
@@ -49,12 +47,27 @@ void externalCalibrateBlink() {
   }
 }
 
-// ================= 环境光测量 (模拟) =================
+// ================= 环境光测量（Arduino内置ADC） =================
 void measureAmbient() {
+  float sum1 = 0, sum2 = 0;
   Serial.println(F("检测环境光中..."));
-  delay(1000);
-  V1_ambient = 2.50;
-  V2_ambient = 2.50;
+  for (uint16_t i = 0; i < BASE_SAMPLES; i++) {
+    sum1 += analogRead(PSD1_PIN) * 5.0 / 1023.0;
+    sum2 += analogRead(PSD2_PIN) * 5.0 / 1023.0;
+    delay(5);
+  }
+  V1_ambient = sum1 / BASE_SAMPLES;
+  V2_ambient = sum2 / BASE_SAMPLES;
+}
+
+// 归一化位置算子 P = (V2 - V1) / (V1 + V2)
+float readP() {
+  float V1 = analogRead(PSD1_PIN) * 5.0 / 1023.0 - V1_ambient;
+  float V2 = analogRead(PSD2_PIN) * 5.0 / 1023.0 - V2_ambient;
+  if (V1 < 0) { V1 = 0; }
+  if (V2 < 0) { V2 = 0; }
+  float sum = V1 + V2;
+  return (sum > 0.001) ? ((V2 - V1) / sum) : 0;
 }
 
 // 重置本轮累积量
@@ -94,13 +107,13 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   pinMode(LED_PWM_PIN, OUTPUT);
-  pinMode(ADC_PIN, INPUT);
+  pinMode(PSD1_PIN, INPUT);
+  pinMode(PSD2_PIN, INPUT);
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_PWM_PIN, HIGH);        // 启动前外置LED常亮
 
-  // 模拟ADS1115初始化成功
-  Serial.print(F("初始化ADS1115... "));
-  delay(500);
+  Serial.print(F("初始化PSD直连采集... "));
+  delay(200);
   Serial.println(F("完成"));
 
   // 初始化完成，板载LED常亮
@@ -162,11 +175,10 @@ void loop() {
     }
   }
 
-  // 模拟该级实测电流与归一化算子（真值 + 确定性微扰动），并累积
+  // 按当前PWM档位计算理论驱动电流，并读取实际PSD位置算子。
   float duty = PWM_LEVELS[level];
   float I = duty / 255.0 * 5.0 / SAMPLE_RESISTOR * 1000.0;
-  float noise = 0.002 * sin(level * 1.7 + count * 0.01);   // 随采样序号变化的微扰动
-  float P = (I - B_TRUE) / K_TRUE + noise;
+  float P = readP();
   sumP += P; sumI += I; sumPP += P * P; sumPI += P * I; sumII += I * I;
   count++;
   levelSample++;

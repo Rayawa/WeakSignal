@@ -1,10 +1,12 @@
-// 测量模块 B版本（视频演示）：不读取ADS1115，直接模拟PSD归一化算子数据，
-// 输出格式与灯语完全同 A版本（code/measure/measure.ino）。
+// 测量模块 B版本：不使用ADS1115，Arduino直接读取PSD两路运放输出。
+// PSD通道1接A0，PSD通道2接A1。
 #include <Arduino.h>
 
 // ================= 参数定义 =================
 #define LED_PWM_PIN   6             // 外置LED PWM控制
 #define LED_BUILTIN   13            // 板载LED
+#define PSD1_PIN       A0           // PSD通道1运放输出
+#define PSD2_PIN       A1           // PSD通道2运放输出
 
 const float    k_IP           = 10.0;    // 电流转换系数 mA/单位P (标定填入)
 const float    b_IP           = 0.0;     // 系统零点偏移量 mA (标定填入)
@@ -12,17 +14,14 @@ const float    PSD_LENGTH     = 20.0;    // PSD有效长度 mm (S3932)
 const float    R_LOOP         = 100.0;   // 回路等效电阻 R Ω
 const float    L_LOOP         = 0.05;    // 回路等效电感 L H
 
+const uint16_t BASE_SAMPLES   = 200;     // 环境光采样次数
 const uint8_t  FILTER_SIZE    = 16;      // 滑动平均窗口大小
 const uint8_t  PERIOD_AVG     = 8;       // 频率周期平均个数
 const uint16_t BLINK_INTERVAL = 800;     // 板载LED闪烁间隔 ms
 
-// 模拟信号参数
-const float    SIM_FREQ       = 0.5;     // 模拟信号频率 Hz (工作频带内)
-const float    SIM_AMP        = 0.03;    // 模拟信号幅值 (单位P)
-
 // ================= 全局变量 =================
-float V1_ambient = 2.50;                 // PSD通道1环境光电压 V (模拟)
-float V2_ambient = 2.50;                 // PSD通道2环境光电压 V (模拟)
+float V1_ambient = 0;                    // PSD通道1环境光电压 V
+float V2_ambient = 0;                    // PSD通道2环境光电压 V
 
 // 滑动平均缓存
 float filterBuffer[FILTER_SIZE];
@@ -48,19 +47,25 @@ void statusSlowBlink() {
   }
 }
 
-// ================= 模拟PSD双通道 =================
+// ================= PSD双通道读取（Arduino内置ADC） =================
 void measureAmbient() {
+  float sum1 = 0, sum2 = 0;
   Serial.println(F("检测环境光中..."));
-  delay(1500);
-  V1_ambient = 2.50;
-  V2_ambient = 2.50;
+  for (uint16_t i = 0; i < BASE_SAMPLES; i++) {
+    sum1 += analogRead(PSD1_PIN) * 5.0 / 1023.0;
+    sum2 += analogRead(PSD2_PIN) * 5.0 / 1023.0;
+    delay(5);
+  }
+  V1_ambient = sum1 / BASE_SAMPLES;
+  V2_ambient = sum2 / BASE_SAMPLES;
 }
 
-// 模拟归一化位置算子 P (正弦差动信号)
+// 归一化位置算子 P = (V2 - V1) / (V1 + V2)
 float readP() {
-  float signal = SIM_AMP * sin(2 * PI * SIM_FREQ * millis() / 1000.0);
-  float V1 = V1_ambient + signal;
-  float V2 = V2_ambient - signal;
+  float V1 = analogRead(PSD1_PIN) * 5.0 / 1023.0 - V1_ambient;
+  float V2 = analogRead(PSD2_PIN) * 5.0 / 1023.0 - V2_ambient;
+  if (V1 < 0) { V1 = 0; }
+  if (V2 < 0) { V2 = 0; }
   float sum = V1 + V2;
   return (sum > 0.001) ? ((V2 - V1) / sum) : 0;
 }
@@ -103,9 +108,10 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_PWM_PIN, HIGH);        // 启动前 D6 与 D13 均常亮
 
-  // 模拟ADS1115初始化成功
-  Serial.print(F("初始化ADS1115... "));
-  delay(500);
+  pinMode(PSD1_PIN, INPUT);
+  pinMode(PSD2_PIN, INPUT);
+  Serial.print(F("初始化PSD直连采集... "));
+  delay(200);
   Serial.println(F("完成"));
 
   Serial.println();
@@ -156,7 +162,7 @@ void loop() {
 
   statusSlowBlink();
 
-  float P = readP();                       // 归一化位置算子 (模拟)
+  float P = readP();                       // 归一化位置算子
   float Pf = filterP(P);                   // 滑动平均滤波
   updateFrequency(Pf);                     // 过零检测计算频率
 
