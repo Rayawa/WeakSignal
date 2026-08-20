@@ -1,2 +1,10 @@
 # Ignore Fritzing application
 fritzing/Fritzing.app/
+
+# macOS metadata
+.DS_Store
+
+# Local presentation videos
+/meeting_01.mp4
+/基于光杠杆放大的微弱电信号测量系统设计与实现.mp4
+/src/demo/video/
