@@ -1,10 +1,16 @@
-# Ignore Fritzing application
-fritzing/Fritzing.app/
+# 发票/采购单据（含个人信息，严禁提交）
+src/invoices/
+/invoices/
 
-# macOS metadata
+# macOS 元数据与 AppleDouble 临时文件（exFAT 卷上会大量生成）
 .DS_Store
+**/.DS_Store
+._*
 
-# Local presentation videos
+# Fritzing 应用（完整发行包，体积过大，本地保留即可）
+src/fritzing/Fritzing.app/
+
+# 本地演示视频
 /meeting_01.mp4
 /基于光杠杆放大的微弱电信号测量系统设计与实现.mp4
 /src/demo/video/
